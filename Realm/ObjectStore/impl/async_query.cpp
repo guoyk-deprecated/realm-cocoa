@@ -201,67 +201,108 @@ std::vector<AsyncQueryChange> AsyncQuery::calculate_changes(size_t table_ndx,
 {
     auto changes = table_ndx < modified_rows.size() ? &modified_rows[table_ndx] : nullptr;
 
-    auto do_calculate_changes = [&](auto const& old_rows, auto const& new_rows) {
+    struct RowInfo {
+        size_t shifted_row_index;
+        size_t prev_tv_index;
+        size_t tv_index;
+        bool maybe_changed = false;
+    };
+
+    auto do_calculate_changes = [&](auto const& old_rows, auto& new_rows) {
+        std::vector<RowInfo> expected_new_rows;
+        expected_new_rows.reserve(std::max(old_rows.size(), new_rows.size()));
+
+        std::vector<size_t> insertion_positions;
+        std::vector<size_t> deletion_positions;
+
         std::vector<AsyncQueryChange> changeset;
         size_t i = 0, j = 0;
-        int shift = 0;
         while (i < old_rows.size() && j < new_rows.size()) {
             auto old_index = old_rows[i];
             auto new_index = new_rows[j];
-            if (old_index.first == new_index.first) {
-                if (old_index.second != new_index.second + shift)
-                    changeset.push_back({old_index.second, new_index.second + shift});
-                else if (row_did_change(*m_query->get_table(), old_index.first, modified_rows))
-                    changeset.push_back({old_index.second, old_index.second}); // FIXME: not i, j because scheme is dumb
+            if (old_index.shifted_row_index == new_index.shifted_row_index) {
+                new_rows[j].prev_tv_index = old_rows[i].tv_index;
+                new_rows[j].maybe_changed = true;
                 ++i;
                 ++j;
             }
-            else if (old_index.first < new_index.first) {
-                changeset.push_back({old_index.second, -1ULL});
-                ++shift;
+            else if (old_index.shifted_row_index < new_index.shifted_row_index) {
+                changeset.push_back({old_index.tv_index, -1ULL});
+                deletion_positions.push_back(old_index.tv_index);
                 ++i;
             }
             else {
-                changeset.push_back({-1ULL, new_index.second});
-                --shift;
+                changeset.push_back({-1ULL, new_index.tv_index});
+                insertion_positions.push_back(old_index.tv_index);
                 ++j;
             }
         }
 
-        for (; i < old_rows.size(); ++i)
-            changeset.push_back({old_rows[i].second, -1ULL});
-        for (; j < new_rows.size(); ++j)
-            changeset.push_back({-1ULL, new_rows[j].second});
+        for (; i < old_rows.size(); ++i) {
+            changeset.push_back({old_rows[i].tv_index, -1ULL});
+            deletion_positions.push_back(old_rows[j].tv_index);
+        }
+        for (; j < new_rows.size(); ++j) {
+            changeset.push_back({-1ULL, new_rows[j].tv_index});
+            insertion_positions.push_back(new_rows[j].tv_index);
+        }
+
+        std::sort(begin(insertion_positions), end(insertion_positions));
+        std::sort(begin(deletion_positions), end(deletion_positions));
+        std::sort(begin(new_rows), end(new_rows), [](auto& lft, auto& rgt) {
+            return lft.tv_index < rgt.tv_index;
+        });
+
+        std::set<size_t> reported_moves;
+
+//        size_t ins = 0, del = 0;
+        int shift = 0;
+        for (size_t i = 0; i < new_rows.size(); ++i) {
+            auto& row = new_rows[i];
+            // needs to loop; is bad; etc.
+            if (std::find(begin(insertion_positions), end(insertion_positions), i) != end(insertion_positions))
+                --shift;
+            if (std::find(begin(deletion_positions), end(deletion_positions), i) != end(deletion_positions))
+                ++shift;
+            if (row.prev_tv_index == -1ULL)
+                continue;
+            if (row.maybe_changed) {
+                if (row_did_change(*m_query->get_table(), row.shifted_row_index, modified_rows))
+                    changeset.push_back({row.tv_index, row.tv_index}); // FIXME: not i, j because scheme is dumb
+            }
+            if (row.tv_index + shift != row.prev_tv_index) {
+                // FIXME: other dir needs to be handled
+                // FIXME: unshift after reaching prev_tv_index
+                if (row.tv_index > row.prev_tv_index)
+                    --shift;
+                if (reported_moves.insert(std::min(row.prev_tv_index, row.tv_index)).second)
+                    changeset.push_back({row.prev_tv_index, row.tv_index});
+            }
+        }
 
         return changeset;
     };
 
-    std::vector<std::pair<size_t, size_t>> old_rows;
+    std::vector<RowInfo> old_rows;
     for (size_t i = 0; i < m_previous_rows.size(); ++i) {
         auto ndx = m_previous_rows[i];
-        old_rows.push_back({ndx, i});
+        old_rows.push_back({ndx, -1ULL, i});
     }
     std::stable_sort(begin(old_rows), end(old_rows), [](auto& lft, auto& rgt) {
-        return lft.first < rgt.first;
+        return lft.shifted_row_index < rgt.shifted_row_index;
     });
 
-    // FIXME: optim: check if there's actually any outgoing links
-//    if (changes && (!changes->moves.empty() || !changes->changed.empty())) {
-        std::vector<std::pair<size_t, size_t>> new_rows;
-        for (size_t i = 0; i < m_tv.size(); ++i) {
-            auto ndx = m_tv[i].get_index();
-            if (changes)
-                map_moves(ndx, *changes);
-            new_rows.push_back({ndx, i});
-        }
-        std::stable_sort(begin(new_rows), end(new_rows), [](auto& lft, auto& rgt) {
-            return lft.first < rgt.first;
-        });
-        return do_calculate_changes(old_rows, new_rows);
-//    }
-//    else {
-//        return do_calculate_changes(old_rows, old_rows);
-//    }
+    std::vector<RowInfo> new_rows;
+    for (size_t i = 0; i < m_tv.size(); ++i) {
+        auto ndx = m_tv[i].get_index();
+        if (changes)
+            map_moves(ndx, *changes);
+        new_rows.push_back({ndx, -1ULL, i});
+    }
+    std::stable_sort(begin(new_rows), end(new_rows), [](auto& lft, auto& rgt) {
+        return lft.shifted_row_index < rgt.shifted_row_index;
+    });
+    return do_calculate_changes(old_rows, new_rows);
 }
 
 void AsyncQuery::run(std::vector<ChangeInfo> const& modified_rows)

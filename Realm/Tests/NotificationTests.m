@@ -254,7 +254,7 @@ static NSNumber *NotFound;
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 3"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 4"]];
     }];
-    [self expectChange:@[@[@3, NotFound], @[@2, NotFound], @[@1, NotFound]]
+    [self expectChange:@[@[@1, NotFound], @[@2, NotFound], @[@3, NotFound]]
                   from:^(RLMRealm *realm) {
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 4"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 3"]];
@@ -456,14 +456,14 @@ static NSNumber *NotFound;
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 3"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 4"]];
     }];
-    [self expectChange:@[@[@3, NotFound], @[@2, NotFound], @[@1, NotFound]]
+    [self expectChange:@[@[@1, NotFound], @[@2, NotFound], @[@3, NotFound]]
                   from:^(RLMRealm *realm) {
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 4"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 3"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol = 2"]];
     }];
 
-    [self expectChange:@[@[@3, @0]] from:^(RLMRealm *realm) {
+    [self expectChange:nil from:^(RLMRealm *realm) {
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol > 4"]];
         [realm deleteObjects:[IntObject objectsInRealm:realm where:@"intCol < 1"]];
     }];
@@ -524,7 +524,7 @@ static NSNumber *NotFound;
 }
 
 - (void)testNonMatchingObjectMovedToIndexOfMatchingRowAndMadeMatching {
-    [self expectChange:nil from:^(RLMRealm *realm) {
+    [self expectChange:@[@[@1, NotFound], @[NotFound, @3]] from:^(RLMRealm *realm) {
         // Make the last object match the query
         [[[IntObject allObjectsInRealm:realm] lastObject] setIntCol:3];
         // Move the now-matching object over a previously matching object
@@ -579,13 +579,13 @@ static NSNumber *NotFound;
         [array insertObject:io atIndex:0];
     }];
 
-    [self expectChange:@[@[NotFound, @1]] from:^(RLMRealm *realm) {
+    [self expectChange:@[@[NotFound, @0]] from:^(RLMRealm *realm) {
         RLMArray *array = [[[ArrayPropertyObject allObjectsInRealm:realm] firstObject] intArray];
         IntObject *io = [IntObject createInRealm:realm withValue:@[@3]];
         [array insertObject:io atIndex:1];
     }];
 
-    [self expectChange:@[@[NotFound, @2]] from:^(RLMRealm *realm) {
+    [self expectChange:@[@[NotFound, @1]] from:^(RLMRealm *realm) {
         RLMArray *array = [[[ArrayPropertyObject allObjectsInRealm:realm] firstObject] intArray];
         IntObject *io = [IntObject createInRealm:realm withValue:@[@3]];
         [array insertObject:io atIndex:2];
@@ -599,10 +599,17 @@ static NSNumber *NotFound;
 }
 
 - (void)testExchangeObjects {
-    [self expectChange:@[@[@1, @2]] from:^(RLMRealm *realm) {
+    // adjacent swap: one move, since second is redundant
+    [self expectChange:@[@[@1, @0]] from:^(RLMRealm *realm) {
         RLMArray *array = [[[ArrayPropertyObject allObjectsInRealm:realm] firstObject] intArray];
         [array exchangeObjectAtIndex:1 withObjectAtIndex:2];
     }];
+
+    // non-adjacent: two moves needed
+//    [self expectChange:@[@[@0, @2]] from:^(RLMRealm *realm) {
+//        RLMArray *array = [[[ArrayPropertyObject allObjectsInRealm:realm] firstObject] intArray];
+//        [array exchangeObjectAtIndex:1 withObjectAtIndex:3];
+//    }];
 }
 
 - (void)testRemoveFromArray {
