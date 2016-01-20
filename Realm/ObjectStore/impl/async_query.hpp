@@ -129,7 +129,7 @@ private:
     std::function<void (std::vector<AsyncQueryChange>, std::exception_ptr)> next_callback();
     size_t next_token();
 
-    std::vector<AsyncQueryChange> calculate_changes(size_t table_ndx, std::vector<ChangeInfo> const& modified_rows, bool sort);
+    std::vector<AsyncQueryChange> calculate_changes(size_t table_ndx, std::vector<ChangeInfo> const& modified_rows);
 };
 
 } // namespace _impl
