@@ -23,6 +23,7 @@
 #include "external_commit_helper.hpp"
 #include "object_store.hpp"
 #include "transact_log_handler.hpp"
+#include "index_set.hpp"
 
 #include <realm/commit_log.hpp>
 #include <realm/group_shared.hpp>
@@ -171,6 +172,22 @@ class TransactLogObserver : public TransactLogValidator {
         return true;
     }
 
+    struct LinkListInfo {
+        size_t table_ndx;
+        size_t row_ndx;
+        size_t col_ndx;
+
+        IndexSet inserts;
+        IndexSet deletes;
+        IndexSet changes;
+        std::vector<std::pair<size_t, size_t>> moves;
+        bool did_clear = false;
+    };
+
+    // Change information for the currently selected LinkList, if any
+    LinkListInfo* m_active_linklist = nullptr;
+    std::vector<LinkListInfo> m_observered_linkviews;
+
 public:
     std::vector<ChangeInfo> m_changes;
 
@@ -207,6 +224,125 @@ public:
 
     bool clear_table()
     {
+        return true;
+    }
+
+    bool select_link_list(size_t col, size_t row, size_t)
+    {
+        m_active_linklist = nullptr;
+        for (auto& o : m_observered_linkviews) {
+            if (o.table_ndx == current_table() && o.row_ndx == row && o.col_ndx == col) {
+                m_active_linklist = &o;
+                break;
+            }
+        }
+        return true;
+    }
+
+    bool link_list_set(size_t index, size_t)
+    {
+        if (!m_active_linklist)
+            return true;
+
+        m_active_linklist->changes.add(index);
+        return true;
+    }
+
+    bool link_list_insert(size_t index, size_t)
+    {
+        if (!m_active_linklist)
+            return true;
+
+        m_active_linklist->changes.shift_for_insert_at(index);
+        m_active_linklist->inserts.insert_at(index);
+
+        for (auto& move : m_active_linklist->moves) {
+            if (move.second >= index)
+                ++move.second;
+        }
+
+        return true;
+    }
+
+    bool link_list_erase(size_t index)
+    {
+        if (!m_active_linklist)
+            return true;
+
+        m_active_linklist->changes.erase_at(index);
+        m_active_linklist->inserts.erase_at(index);
+        // this is probably wrong for mixed insert/delete
+        m_active_linklist->deletes.add_shifted(m_active_linklist->inserts.unshift(index));
+
+        for (size_t i = 0; i < m_active_linklist->moves.size(); ++i) {
+            auto& move = m_active_linklist->moves[i];
+            if (move.second == index) {
+                m_active_linklist->moves.erase(m_active_linklist->moves.begin() + i);
+                --i;
+            }
+            else if (move.second > index)
+                --move.second;
+        }
+
+        return true;
+    }
+
+    bool link_list_nullify(size_t index)
+    {
+        return link_list_erase(index);
+    }
+
+    bool link_list_swap(size_t index1, size_t index2)
+    {
+        link_list_set(index1, 0);
+        link_list_set(index2, 0);
+        return true;
+    }
+
+    bool link_list_clear(size_t /*old_size*/)
+    {
+        if (!m_active_linklist)
+            return true;
+
+        m_active_linklist->did_clear = true;
+        m_active_linklist->changes.clear();
+        m_active_linklist->inserts.clear();
+        m_active_linklist->deletes.clear();
+        m_active_linklist->moves.clear();
+
+        return true;
+    }
+
+    bool link_list_move(size_t from, size_t to)
+    {
+        if (!m_active_linklist)
+            return true;
+
+        bool sadhkljh = from < to;
+
+        from = m_active_linklist->inserts.unshift(from);
+        from = m_active_linklist->deletes.unshift(from);
+
+        // needs to shift prev moves
+        m_active_linklist->moves.push_back({from, to});
+
+        if (sadhkljh) {
+            m_active_linklist->changes.erase_at(from);
+            m_active_linklist->inserts.erase_at(from);
+            m_active_linklist->deletes.add(from);
+
+            m_active_linklist->changes.shift_for_insert_at(from);
+            m_active_linklist->inserts.shift_for_insert_at(from);
+        }
+        else {
+            m_active_linklist->changes.shift_for_insert_at(from);
+            m_active_linklist->inserts.shift_for_insert_at(from);
+
+            m_active_linklist->changes.erase_at(from);
+            m_active_linklist->inserts.erase_at(from);
+            m_active_linklist->deletes.add(from);
+        }
+
         return true;
     }
 

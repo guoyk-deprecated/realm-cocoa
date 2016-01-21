@@ -36,6 +36,9 @@ public:
     // Add an index to the set, doing nothing if it's already present
     void add(size_t index);
 
+    // Add an index which has had all of the ranges in the set before it removed
+    void add_shifted(size_t index);
+
     // Remove all indexes from the set and then add a single range starting from
     // zero with the given length
     void set(size_t len);
@@ -44,8 +47,17 @@ public:
     // after that point back by one
     void insert_at(size_t index);
 
-    // Add an index which has had all of the ranges in the set before it removed
-    void add_shifted(size_t index);
+    // Shift indexes at or after the given point back by one
+    void shift_for_insert_at(size_t index);
+
+    // Delete an index at the given position, shifting indexes after that point
+    // forward by one
+    void erase_at(size_t index);
+
+    // this is probably wrong
+    size_t unshift(size_t index) const;
+
+    void clear();
 
 private:
     std::vector<value_type> m_ranges;
